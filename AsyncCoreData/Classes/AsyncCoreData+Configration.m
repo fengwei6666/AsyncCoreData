@@ -65,17 +65,66 @@ extern NSRunLoop *sBgNSRunloop;
     background_async(busniessBlock);
 }
 
++ (void)setupPersistantStoreWithSQLiteURL:(NSURL *)sqliteURl modelName:(NSString *)modelName
+{
+    NSURL *destUrl = sqliteURl;
+    if(!destUrl)
+    {
+        NSURL *dir = [[[NSFileManager defaultManager] URLsForDirectory:NSLibraryDirectory inDomains:NSUserDomainMask] lastObject];
+        destUrl = [dir URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.sqlite",modelName]];
+    }
+    
+    NSURL *coreDataModelFileUrl = [[NSBundle mainBundle] URLForResource:modelName withExtension:@"momd"];
+    NSString *key = destUrl.absoluteString;
+    
+    NSPersistentStoreCoordinator *persistantStoreCord = [sPersistantStoreMap objectForKey:key];
+    if(!persistantStoreCord) {
+        
+        NSManagedObjectModel *mobjModel = [[NSManagedObjectModel alloc] initWithContentsOfURL:coreDataModelFileUrl];
+        NSError *error = nil;
+        persistantStoreCord = [[NSPersistentStoreCoordinator alloc] initWithManagedObjectModel:mobjModel];
+        
+        NSDictionary *options = [NSDictionary dictionaryWithObjectsAndKeys:
+                                 [NSNumber numberWithBool:YES], NSMigratePersistentStoresAutomaticallyOption,
+                                 [NSNumber numberWithBool:YES], NSInferMappingModelAutomaticallyOption, nil];
+        
+        [persistantStoreCord addPersistentStoreWithType:NSSQLiteStoreType configuration:nil URL:destUrl options:options error:&error];
+        
+        NSAssert(!error, @"persistentStoreCord error %@",error.description);
+        [sPersistantStoreMap setObject:persistantStoreCord forKey:key];
+    }
+    
+    NSString *classIndependentKey = NSStringFromClass([self class]);
+    NSPersistentStoreCoordinator *psc = [sPersistantStoreClassMap objectForKey:classIndependentKey];
+    
+    if(!psc || psc != persistantStoreCord) {
+        @synchronized(sPersistantStoreClassMap) {
+            [sPersistantStoreClassMap setObject:persistantStoreCord forKey:classIndependentKey];
+        }
+    }
+}
+
 +(nullable NSPersistentStoreCoordinator *)persistentStoreCoordinator {
     NSString *key = NSStringFromClass([self class]);
     return  [sPersistantStoreClassMap objectForKey:key];
 }
 
++(void)invalidatePersistantSotre {
+    NSString *key = NSStringFromClass([self class]);
+    [sPersistantStoreClassMap removeObjectForKey:key];
+}
+
+
 +(void)setModelToDataBaseMapper:(nonnull T_ModelToManagedObjectBlock)mapper forEntity:(nonnull NSString *)entityName {
-    [sSettingDBValuesBlockMap setObject:mapper forKey:entityName];
+    @synchronized (sSettingDBValuesBlockMap) {
+        [sSettingDBValuesBlockMap setObject:[mapper copy] forKey:entityName];
+    }
 }
 
 +(void)setModelFromDataBaseMapper:(nonnull T_ModelFromManagedObjectBlock)mapper forEntity:(nonnull NSString *)entityName {
-    [sGettingDBValuesBlockMap setObject:mapper forKey:entityName];
+    @synchronized (sGettingDBValuesBlockMap) {
+        [sGettingDBValuesBlockMap setObject:[mapper copy] forKey:entityName];
+    }
 }
 
 +(nullable id)inter_classSharedValueFromMap:(NSDictionary *)map {
@@ -95,8 +144,13 @@ extern NSRunLoop *sBgNSRunloop;
 
 
 +(NSManagedObjectContext *)newContext {
-    NSManagedObjectContext *context = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSPrivateQueueConcurrencyType];
-    [context setPersistentStoreCoordinator:[self  persistentStoreCoordinator]];
+    NSManagedObjectContext *context = nil;
+    NSPersistentStoreCoordinator *persistentStore = [self persistentStoreCoordinator];
+    if ([persistentStore.persistentStores count] > 0) {
+        context = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSPrivateQueueConcurrencyType];
+        [context setPersistentStoreCoordinator:persistentStore];
+    }
+    
     return context;
 }
 

@@ -33,6 +33,7 @@ typedef __kindof NSObject  * _Nonnull  (^T_ModelFromManagedObjectBlock)(__kindof
                 withModel:(nonnull NSString *)modelName
                completion:(void(^ _Nonnull )(void))mainThreadBlock;
 
++ (void)setupPersistantStoreWithSQLiteURL:(nullable NSURL *)sqliteURl modelName:(nonnull NSString *)modelName;
 
 /**
  数据库写入和读取时候，通过block来设定数据映射规则
@@ -63,12 +64,14 @@ typedef __kindof NSObject  * _Nonnull  (^T_ModelFromManagedObjectBlock)(__kindof
 +(void)setModelFromDataBaseMapper:(nonnull T_ModelFromManagedObjectBlock)mapper forEntity:(nonnull NSString *)entityName; //非线程安全
 
 +(nullable NSPersistentStoreCoordinator *)persistentStoreCoordinator;
++(void)invalidatePersistantSotre;//一般不会用到，测试的时候用
 
 +(NSManagedObjectContext *)newContext; //在当前线程创建一个新的context
 
 @end
 
 
+//只是实验性尝试，打开的话会造成所有操作都集中在一个线程，造成任务拥堵，不能很好地利用多线程资源。
 #define BG_USE_SAME_RUNLOOP_  0 //@available(macOS 10.2, iOS 10, *)
 
 

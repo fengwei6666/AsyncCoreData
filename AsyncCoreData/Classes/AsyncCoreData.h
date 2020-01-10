@@ -106,6 +106,25 @@ modelsWithPredicateAsync:(nullable NSPredicate *)predicate
         completion:(void (^)(NSArray *))block;
 
 
+/**
+ 查询指定表内指定列数据，根据分组及其它限制返回数据，返回数据格式字典数组
+ 例：@[@{@"name": xxx, @"country": xxx}, ...]
+ @param entityName 表名
+ @param keyPathes 指定列名称, 可参考NSFetchRequest.h内propertiesToFetch属性
+ @param groups 指定分组, 可参考NSFetchRequest.h内propertiesToGroupBy属性
+ @param predicate 谓词限制
+ @param sortKeyPath 排序的字段，注意这个字段是数据库表的字段，而非数据模型的字段
+ @param range 读取数据范围（就像是分页一样）
+ @param reverse 是否按照插入顺序反序输出， YES先插入的在后面，NO后插入的在前面
+ @return NSArray<NSDictionary *> *
+ */
++(NSArray<NSDictionary *> *)queryEntity:(nonnull NSString *)entityName
+                              keyPathes:(NSArray *)keyPathes
+                                groupby:(NSArray *)groups
+                          withPredicate:(NSPredicate *)predicate
+                            sortKeyPath:(NSString *)sortKeyPath
+                                inRange:(NSRange)range
+                                reverse:(BOOL)reverse;
 
 #pragma mark- statitic/count
 
@@ -119,6 +138,9 @@ modelsWithPredicateAsync:(nullable NSPredicate *)predicate
 
 
 #pragma mark- statitic/massive
+
+// 设置字段对应的方法
++ (NSExpressionDescription *)expressionDescriptionOfFuction:(NSString *)func forKeyPath:(NSString *)keyPath;
 
 //function could be @"max:" @"min:" @"count"() @"sum:"
 +(NSNumber *)queryEntity:(NSString *)entityName
@@ -149,6 +171,9 @@ modelsWithPredicateAsync:(nullable NSPredicate *)predicate
                completion:(void (^)(NSArray<NSDictionary *> *))block;
 
 
++(nullable id)modelForStoreUrl:(nonnull NSURL *)storeUrl;
++(nullable id)modelForStoreID:(nonnull NSManagedObjectID *)storeID;
+
 #pragma mark- for subclasses
 +(nullable NSManagedObject *)queryEntity:(NSString *)entityName
                  existingDBModelForModel:(__kindof NSObject<UniqueValueProtocol> *)model
@@ -169,16 +194,23 @@ modelsWithPredicateAsync:(nullable NSPredicate *)predicate
                                                 reverse:(BOOL)reverse
                                               inContext:(nonnull NSManagedObjectContext *)context;
 
-+(nullable id)modelForUrl:(nonnull NSURL *)representationUrl;
+
+//因为NSManagedObject是跟特定NSManagedObjectContext相关的，当在操作NSManagedObject的时候要保证它对应的context还存在，所以这个方法的调用者有责任对context的生命周期进行维护
++(nullable NSManagedObject *)DBModelForStoreID:(nonnull NSManagedObjectID *)storeID inContext:(nonnull NSManagedObjectContext *)context;
 
 //将数据库同步到磁盘 for subclass
 +(nullable NSError *)synchronizeinContext:(nonnull NSManagedObjectContext *)context;
 
 #pragma mark- 清理缓存
-//ios会在收到内存警告到时候自动清理， osx需要程序员自己在适当的实际调用该方法
+//ios会在收到内存警告到时候自动清理， osx需要程序员自己在适当的时机调用该方法
 +(void)clearUnNessesaryCachedData;
 
 @end
 
 
 #import "AsyncCoreData+Configration.h"
+
+@interface NSObject (AsyncCoreData)
+@property (nonatomic, nullable, readonly) NSManagedObjectID *storeID;
+@property (nonatomic, nullable, readonly) NSURL *StoreUrl;
+@end

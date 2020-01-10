@@ -9,11 +9,9 @@
 #import "AsyncCoreData.h"
 #import <objc/runtime.h>
 
-@interface NSObject (CoreDataModel)
-@property (nonatomic, strong) NSManagedObjectID *storeID;
-@end
 
-@implementation NSObject (CoreDataModel)
+
+@implementation NSObject (AsyncCoreData)
 
 -(void)setStoreID:(NSManagedObjectID *)storeID {
     objc_setAssociatedObject(self, @selector(storeID), storeID, OBJC_ASSOCIATION_RETAIN);
@@ -21,6 +19,10 @@
 
 -(NSManagedObjectID *)storeID {
     return objc_getAssociatedObject(self, @selector(storeID));
+}
+
+-(nullable NSURL *)StoreUrl {
+    return self.storeID.URIRepresentation;
 }
 
 @end
@@ -71,7 +73,17 @@ static NSRecursiveLock *sWriteLock;
 #endif
 }
 
-
++ (BOOL)isAvailableContext:(NSManagedObjectContext *)context forEntityName:(NSString *)entityName
+{
+    BOOL available = NO;
+    if (context && [entityName length] > 0) {
+        NSDictionary *entitiesMap = context.persistentStoreCoordinator.managedObjectModel.entitiesByName;
+        if (entitiesMap[entityName]) {
+            available = YES;
+        }
+    }
+    return available;
+}
 
 #pragma mark- chache
 //注意dbObj参数必须是已经保存到数据库中的数据 即dbObj的objectID.isTemporaryID = NO
@@ -91,7 +103,7 @@ static NSRecursiveLock *sWriteLock;
     }
     
     if(obj && obj.storeID)
-        [subMap setObject:obj forKey:obj.storeID.URIRepresentation];
+        [subMap setObject:obj forKey:obj.storeID.URIRepresentation.absoluteString];
     
     _remove_cache_lock();
 }
@@ -104,12 +116,13 @@ static NSRecursiveLock *sWriteLock;
     _add_cache_lock();
     
     NSMutableDictionary *subMap = [sDataBaseCacheMap objectForKey:rootKey];
+    id retObj = nil;
     if (subMap)
-        return [subMap objectForKey:dbModel.objectID.URIRepresentation];
-    else
-        return nil;
-    
+        retObj = [subMap objectForKey:dbModel.objectID.URIRepresentation.absoluteString];
+
     _remove_cache_lock();
+    
+    return retObj;
 }
 
 +(void)removeCachedModelForDBModel:(nonnull NSManagedObject *)dbModel forEntity:(NSString *)entityName
@@ -118,7 +131,7 @@ static NSRecursiveLock *sWriteLock;
     _add_cache_lock();
     NSMutableDictionary *subMap = [sDataBaseCacheMap objectForKey:rootKey];
     if (subMap)
-        return [subMap removeObjectForKey:dbModel.objectID.URIRepresentation];
+        [subMap removeObjectForKey:dbModel.objectID.URIRepresentation.absoluteString];
     _remove_cache_lock();
 }
 
@@ -163,26 +176,43 @@ static NSRecursiveLock *sWriteLock;
 
 
 
-+(nullable id)modelForUrl:(nonnull NSURL *)representationUrl
++(nullable id)modelForStoreUrl:(nonnull NSURL *)storeUrl
 {
-    if(!representationUrl)
+    if([storeUrl.absoluteString length] == 0)
         return nil;
     
-    NSManagedObjectID *obID = [[self persistentStoreCoordinator] managedObjectIDForURIRepresentation:representationUrl];
+    NSManagedObjectID *obID = [[self persistentStoreCoordinator] managedObjectIDForURIRepresentation:storeUrl];
     
-    if(obID)
-    {
-        NSError *error;
-        NSManagedObject *managedObj = [[self newContext] existingObjectWithID:obID error:&error];
-        return [self queryEntity:managedObj.entity.name modelFromDBModel:managedObj];
-    }
-    else
+    return [self modelForStoreID:obID];
+}
+
++(nullable id)modelForStoreID:(nonnull NSManagedObjectID *)storeID {
+    
+    NSManagedObjectContext *context = [self newContext];
+    NSManagedObject *managedObj = [self DBModelForStoreID:storeID inContext:context];
+    id retObj = nil;
+    if(managedObj)
+        retObj =  [self queryEntity:managedObj.entity.name modelFromDBModel:managedObj];
+
+    return retObj;
+}
+
+//因为NSManagedObject是跟特定NSManagedObjectContext相关的，当在操作NSManagedObject的时候要保证它对应的context还存在，所以这个方法的调用者有责任对context的生命周期进行维护
++(nullable NSManagedObject *)DBModelForStoreID:(nonnull NSManagedObjectID *)storeID inContext:(nonnull NSManagedObjectContext *)context {
+    
+    if(!storeID)
         return nil;
+    
+    NSError *error;
+    NSManagedObject *managedObj = [context existingObjectWithID:storeID error:&error];
+    
+    return managedObj;
 }
 
 +(NSError *)queryEntity:(NSString *)entityName saveModels:(nonnull NSArray<id<UniqueValueProtocol>> *)datas {
     return [self queryEntity:entityName saveModels:datas inContext:[self newContext]];
 }
+
 
 +(void)queryEntity:(NSString *)entityName saveModelsAsync:(NSArray<id<UniqueValueProtocol>> *)datas completion:(void (^)(NSError *))block {
     
@@ -216,7 +246,7 @@ static NSRecursiveLock *sWriteLock;
             blk(m, DBm);
 
             //   [self cacheObject:m forManagedObject:DBm]; //cacke比较复杂 如果是更新操作的话，之前的步骤会保证cacke，如果是插入操作的话，到后面再cacke
-            
+
             if(!DBm.objectID.isTemporaryID) {
                 m.storeID = DBm.objectID;
             }
@@ -307,7 +337,7 @@ static NSRecursiveLock *sWriteLock;
     NSError *e;
     for(id v in modelUniquevalues) {
         NSPredicate *predicate = [NSPredicate predicateWithFormat:@"uniqueID = %@",v];
-        NSArray<NSManagedObject *> *a = [self queryEntity:entityName dbModelsWithPredicate:predicate inRange:NSMakeRange(0, NSUIntegerMax) sortByKey:nil reverse:YES inContext:context]; //YES效率会比较高
+        NSArray<NSManagedObject *> *a = [self queryEntity:entityName dbModelsWithPredicate:predicate inRange:NSMakeRange(0, NSUIntegerMax) sortByKey:nil reverse:NO inContext:context];
         for(NSManagedObject *mobj in a) {
             [context deleteObject:mobj];
         }
@@ -338,7 +368,7 @@ static NSRecursiveLock *sWriteLock;
     
     _add_write_lock();
     NSError *e;
-    NSArray<NSManagedObject *> *a = [self queryEntity:entityName dbModelsWithPredicate:predicate inRange:NSMakeRange(0, NSUIntegerMax) sortByKey:nil reverse:YES inContext:context]; //YES效率会比较高
+    NSArray<NSManagedObject *> *a = [self queryEntity:entityName dbModelsWithPredicate:predicate inRange:NSMakeRange(0, NSUIntegerMax) sortByKey:nil reverse:NO inContext:context];
     for(NSManagedObject *mobj in a) {
         [context deleteObject:mobj];
     }
@@ -354,11 +384,15 @@ static NSRecursiveLock *sWriteLock;
 {
     NSObject *m = [self cachedModelForDBModel:DBModel forEntity:entityName];
     if(!m) {
+        
         T_ModelFromManagedObjectBlock blk = [sGettingDBValuesBlockMap objectForKey:entityName];
         NSAssert(blk, @"model mapper block haven't set for entity %@, Use +[AsyncCoreData setModelFromDataBaseMapper:forEntity] method to setup",entityName);
+//      因为managedObjectContext是assign属性，所以如果被释放掉了的话访问的时候就会出现野指针错误，所以这句断言并不能输出预期的信息
+//       NSAssert(DBModel.managedObjectContext, @"the NSManagedObject.managedObjectContext value is nil, which will cause fault value");
+        //在执行block前要保证NSManagedObject.managedObjectContext依然存在，否则会引发fault data
         m = blk(nil, DBModel);
         m.storeID = DBModel.objectID;
-        [self cacheModel:DBModel forEntity:entityName];
+        [self cacheModel:m forEntity:entityName];
     }
     return m;
 }
@@ -377,7 +411,7 @@ static NSRecursiveLock *sWriteLock;
         predicate = [NSPredicate predicateWithFormat:@"uniqueID = %@",model.uniqueValue];
     
     if(predicate) {
-        NSArray *results = [self queryEntity:entityName dbModelsWithPredicate:predicate inRange:NSMakeRange(0, NSIntegerMax) sortByKey:nil reverse:YES inContext:context];
+        NSArray *results = [self queryEntity:entityName dbModelsWithPredicate:predicate inRange:NSMakeRange(0, NSIntegerMax) sortByKey:nil reverse:NO inContext:context];
         retObj = [self inter_filtOutOnlyEntityInResultList:results inContext:context];
     }
     else if(model.storeID)
@@ -393,10 +427,31 @@ static NSRecursiveLock *sWriteLock;
     
     NSManagedObject *retObj = [self  queryEntity:entityName existingDBModelForModel:model inContext:context];
     
-    if(!retObj && create)
+    if(!retObj && create && context)
         retObj = [NSEntityDescription insertNewObjectForEntityForName:entityName inManagedObjectContext:context];
     
     return retObj;
+}
+
++(NSArray<NSDictionary *> *)queryEntity:(nonnull NSString *)entityName
+                              keyPathes:(NSArray *)keyPathes
+                                groupby:(NSArray *)groups
+                          withPredicate:(NSPredicate *)predicate
+                            sortKeyPath:(NSString *)sortKeyPath
+                                inRange:(NSRange)range
+                                reverse:(BOOL)reverse {
+#warning todo check
+
+    NSFetchRequest *fetchRequest = [NSFetchRequest fetchRequestWithEntityName:entityName];
+    fetchRequest.predicate = predicate;
+    [self set_UpFetch:fetchRequest forProperties:keyPathes sortByKeyPath:sortKeyPath reverse:reverse];
+    [fetchRequest setPropertiesToGroupBy:groups];
+    fetchRequest.fetchOffset = range.location;
+    fetchRequest.fetchLimit = range.length;
+    
+    NSError *error;
+    NSArray *results = [[self newContext] executeFetchRequest:fetchRequest error:&error];
+    return results;
 }
 
 #pragma mark-
@@ -479,12 +534,15 @@ static NSRecursiveLock *sWriteLock;
                                                 reverse:(BOOL)reverse
                                               inContext:(NSManagedObjectContext *)context
 {
+//    if (![self isAvailableContext:context forEntityName:frqs.entityName]) {
+//        return nil;
+//    }
     frqs.fetchOffset = 0;
     frqs.fetchLimit = NSUIntegerMax;
     
     if(sortKey)
     {
-        NSSortDescriptor *sortDescriptor = [NSSortDescriptor sortDescriptorWithKey:sortKey ascending:!reverse];
+        NSSortDescriptor *sortDescriptor = [NSSortDescriptor sortDescriptorWithKey:sortKey ascending:YES];//ascending value must be YES
         if(frqs.sortDescriptors)
         {
             NSArray *sortDescriptors = frqs.sortDescriptors;
@@ -538,9 +596,16 @@ static NSRecursiveLock *sWriteLock;
     frqs.fetchOffset = range.location;
     frqs.fetchLimit = range.length;
     
-    NSArray *results = [context executeFetchRequest:frqs error:nil];
+    NSArray *results = nil;
+    @try {
+        results = [context executeFetchRequest:frqs error:nil];
+    } @catch (NSException *exception) {
+        NSLog(@"Exception:%@",exception);
+    } @finally {
+        
+    }
     
-    if(!sortKey && reverse)
+    if(reverse)
     {
         
 #if 0
@@ -636,6 +701,8 @@ numberOfItemsWithPredicate:(nullable NSPredicate *)predicate
         fetchRequest.predicate = predicate;
     
     NSArray *propertiesToFetch = @[[self expressionDescriptionOfFuction:func forKeyPath:key]];
+    NSExpressionDescription *exDesc = propertiesToFetch.firstObject;
+    [exDesc setName:@"requestValue"];
     [self set_UpFetch:fetchRequest forProperties:propertiesToFetch sortByKeyPath:nil reverse:NO];
     
     
